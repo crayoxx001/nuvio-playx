@@ -1,12 +1,12 @@
 {
   "name": "PlayX",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "scrapers": [
     {
       "id": "playx",
       "name": "PlayX",
       "description": "Peliculas y series en espanol. Resuelve hosters HLS (streamwish/premilkyway) priorizando latino.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": "Zeus",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/playx.js",

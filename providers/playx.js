@@ -1,6 +1,6 @@
 /**
  * playx - Built from src/playx/
- * Generated: 2026-09-08T22:21:24.573Z
+ * Generated: 2026-09-08T22:35:47.664Z
  */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -371,33 +371,88 @@ function resolveHls(playerUrl, fetchText2) {
     }
   });
 }
+function inspectMaster(masterUrl, fetchText2) {
+  return __async(this, null, function* () {
+    if (!masterUrl || !masterUrl.includes(".m3u8")) return null;
+    try {
+      const txt = yield fetchText2(masterUrl);
+      let max = 0;
+      const re = /RESOLUTION=\d+x(\d+)/g;
+      let m;
+      while (m = re.exec(txt)) {
+        const h = parseInt(m[1], 10);
+        if (h > max) max = h;
+      }
+      return max || null;
+    } catch (e) {
+      return null;
+    }
+  });
+}
 
 // src/playx/index.js
+var LANG_REGEX = [
+  /latino/i,
+  /hispano/i,
+  /castellano/i,
+  /espa/i,
+  /subtitu/i
+];
+function langRank(label) {
+  for (let i = 0; i < LANG_REGEX.length; i++) {
+    if (LANG_REGEX[i].test(label)) return i;
+  }
+  return 99;
+}
+function qualityLabel(h) {
+  if (!h) return "HD";
+  if (h >= 2160) return "4K";
+  if (h >= 1440) return "1440p";
+  if (h >= 1080) return "1080p";
+  if (h >= 720) return "720p";
+  return h + "p";
+}
 function getStreams(tmdbId, mediaType, season, episode) {
   return __async(this, null, function* () {
     try {
       const detailUrl = yield resolveUrl(tmdbId, mediaType, season, episode);
       if (!detailUrl) return [];
       const { servers } = yield extractStreams(detailUrl);
-      const out = [];
+      if (!servers || servers.length === 0) return [];
+      const resolved = [];
       for (const s of servers) {
         try {
           const hls = yield resolveHls(s.url, fetchText);
           if (!hls) continue;
-          out.push({
-            name: `PlayX`,
-            title: `${s.lang} \xB7 ${s.server} \xB7 ${s.calidad}`,
-            url: hls,
-            quality: s.calidad,
-            headers: {
-              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36",
-              Referer: ORIGIN + "/"
-            }
+          const h = yield inspectMaster(hls, fetchText);
+          resolved.push({
+            lang: s.lang,
+            rank: langRank(s.lang),
+            server: s.server,
+            height: h,
+            url: hls
           });
         } catch (e) {
         }
       }
-      return out;
+      if (resolved.length === 0) return [];
+      const bestRank = Math.min(...resolved.map((r) => r.rank));
+      const inLang = resolved.filter((r) => r.rank === bestRank);
+      inLang.sort((a, b) => (b.height || 0) - (a.height || 0));
+      const best = inLang[0];
+      const q = qualityLabel(best.height);
+      return [
+        {
+          name: `PlayX`,
+          title: `${best.lang} \xB7 ${q}${best.server && best.server !== "server" ? " \xB7 " + best.server : ""}`,
+          url: best.url,
+          quality: q,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36",
+            Referer: ORIGIN + "/"
+          }
+        }
+      ];
     } catch (e) {
       console.error(`[provider] Error: ${e.message}`);
       return [];

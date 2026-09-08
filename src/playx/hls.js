@@ -205,3 +205,24 @@ export async function resolveHls(playerUrl, fetchText) {
     return null;
   }
 }
+
+// Lee la maxima resolucion declarada en un master HLS. Devuelve la altura en
+// px (p.ej. 1080) o null si el playlist es mono-variante / no la expone.
+// No descarga segmentos: solo el master (unos cientos de bytes de lineas de
+// variantes).
+export async function inspectMaster(masterUrl, fetchText) {
+  if (!masterUrl || !masterUrl.includes(".m3u8")) return null;
+  try {
+    const txt = await fetchText(masterUrl);
+    let max = 0;
+    const re = /RESOLUTION=\d+x(\d+)/g;
+    let m;
+    while ((m = re.exec(txt))) {
+      const h = parseInt(m[1], 10);
+      if (h > max) max = h;
+    }
+    return max || null;
+  } catch (e) {
+    return null;
+  }
+}
