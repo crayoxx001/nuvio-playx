@@ -1,0 +1,18 @@
+[
+  {
+    "id": "playx",
+    "name": "PlayX",
+    "description": "Peliculas en espanol. Abre los servidores de reproduccion (streamwish, vidhide, voe, doodstream) en navegador externo del dispositivo.",
+    "version": "0.1.0",
+    "author": "Zeus",
+    "supportedTypes": ["movie"],
+    "filename": "providers/playx.js",
+    "enabled": true,
+    "logo": "",
+    "contentLanguage": ["es"],
+    "formats": ["mp4", "m3u8"],
+    "limited": false,
+    "disabledPlatforms": [],
+    "supportsExternalPlayer": true
+  }
+]

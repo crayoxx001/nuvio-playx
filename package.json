@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "build": "node build.js poseidon",
+    "build:watch": "node build.js --watch poseidon",
+    "test": "node test.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.21.0"
+  }
+}
