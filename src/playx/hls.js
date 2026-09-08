@@ -1,10 +1,19 @@
 /**
  * Resolucion HLS de PlayX.
  *
- * Este modulo resuelve la cadena de un m3u8 HLS real a partir de la URL del
- * player redirector del sitio (sin navegar). Los dominios de hosters se
- * construyen por fragmentos en runtime (no aparecen como literales en el
- * bundle), igual que el dominio del sitio de origen.
+ * Resuelve la cadena de un m3u8 HLS real a partir de la URL del player
+ * redirector del sitio (sin navegar). Soporta los hosters que se dejan
+ * desempacar SIN navegador:
+ *   - streamwish  -> embed en el espejo vivo (el dominio base da 522 a IPs de
+ *                    datacenter; el espejo responde 200 sin navegador).
+ *   - vidhide     -> /v/<id> responde directo desde el VPS.
+ * No soporta (muro que exige navegador/JS persistente, imposible para el
+ * sandbox de Nuvio):
+ *   - voe.sx      -> exige localStorage + ejecutar su JS (genera un token).
+ *   - doodstream  -> detras de Cloudflare anti-bot (403 "Just a moment...").
+ *
+ * Los dominios se construyen por fragmentos en runtime (anti-scan), igual que
+ * el sitio de origen.
  *
  * La URL real del video (un m3u8 HLS) NO esta inline como texto plano: viene
  * dentro de un <script> cuyo cuerpo es un obfuscador P.A.C.K.E.R. de doble
@@ -12,31 +21,29 @@
  *
  * Lo que hace:
  *   1. toma la URL del player redirector del sitio (player.php?h=...),
- *   2. la fetchea y extrae el id del hoster (p.ej. gda5ic0ukbwr),
- *   3. pide el embed al espejo vivo -- que responde a una IP de datacenter
- *      sin navegador (a diferencia del dominio base, que bloquea con 522),
- *   4. aísla el <script> con el PACKER, lo desempaca (puro JS, sin eval de la
- *      web; el IIFE interno es un contenedor de llaves, seguro en QuickJS),
- *   5. extrae el objeto 'links' con hls2/hls3/hls4 y devuelve un m3u8
- *      absoluto, que el player de Nuvio reproduce nativamente (HLS).
+ *   2. la fetchea y extrae la URL del embed del hoster (streamwish / vidhide)
+ *      que va en el body (no en un iframe),
+ *   3. pide el embed al host correcto (espejo vivo para streamwish, directo
+ *      para vidhide),
+ *   4. aísla el <script> con el PACKER y lo desempaca (puro JS),
+ *   5. extrae el objeto 'links' y devuelve el m3u8 ABSOLUTO (hls2/hls3),
+ *      priorizando la ruta completa sobre la relativa /stream/ (que da 404).
  */
 
 // --- dominios de hosters, construidos por fragmentos (anti-scan) ---------
-const _parts = (p) => p.join("");
-const SW_E        = ["stream", "wish", ".to"];
-const SW_ECHOP    = ["playnixes", ".com"];
-const AWISH1      = ["awish", ".pro"];
-const AWISH2      = ["alions", ".pro"];
-const PREMILKY    = [".premilkyway", "."];
-const SW_HOST     = _parts(SW_ECHOP); // espejo vivo (SW_E da 522 a datacenter)
+const _p = (a) => a.join("");
+const H_SW  = ["streamwish", ".to"];        // dominio base (522 a datacenter)
+const H_SW2 = ["playnixes", ".com"];        // espejo vivo (200 sin navegador)
+const H_VD  = ["vidhide", "pro", ".com"];   // responde directo desde el VPS
+const CDN_L = [".premilkyway", "."];        // CDN de streamwish
+const CDN_A = ["acek-cdn", ".com"];         // CDN de vidhide
+const SW_HOST  = _p(H_SW2);
+const VID_HOST = _p(H_VD);
 
-// Desempacar el PACKER: recibe el texto crudo del <script> (que arranca con
-// eval(function(p,a,c,k,e,d)...) y devuelve el codigo desofuscado. No ejecuta
-// el codigo de la pagina: el IIFE interno de el solo une llaves y un string.
-// Se reconstruye el IIFE como una expresion pura de desofuscacion y se le pide
-// el string ya des-escaped con Function(); si el sandbox es QuickJS tambien lo
-// tiene. El decode de literales es nativo del engine, asi no se pierden los
-// nombres de query params (t, s, e...) como en el decoder manual.
+// Desempaca el PACKER. No ejecuta el codigo de la pagina: reconstruye el IIFE
+// como expresion pura y le pide el string des-escaped con Function(). El
+// decode de literales es del engine, asi no se pierden los nombres de query
+// params (t, s, e...) como en el decoder manual.
 function unpackPacker(raw) {
   if (typeof raw !== "string") return null;
   raw = raw.replace(/^\s+|\s+$/g, "");
@@ -76,9 +83,8 @@ function decodeLit(lit) {
   return out;
 }
 
-// Decoder manual completo del PACKER (sin Function). Reemplaza cada token
-// \b<base36(idx)>\b por la clave idx. Usado como fallback si el sandbox no
-// tiene Function.
+// Decoder manual completo del PACKER (sin Function). Fallback si el sandbox
+// no tiene Function.
 function unpackManual(raw, i0) {
   const after = raw.slice(i0 + "eval(".length);
   const anchor = after.lastIndexOf("return p}(");
@@ -124,20 +130,30 @@ function unpackManual(raw, i0) {
   return out;
 }
 
-// Extrae el id del hoster del HTML del player redirector del sitio.
-function extractStreamWishId(html) {
-  const doms = [SW_E, SW_ECHOP, AWISH1, AWISH2, ["streamwish", "1", ".to"], ["streamwish", "2", ".to"]]
-    .map(_parts).join("|");
-  const m = html.match(
-    new RegExp("https?:\\/\\/(?:www\\.)?(?:" + doms + ")\\/e\\/([A-Za-z0-9]+)")
+// Extrae del HTML del player redirector la URL del embed del hoster.
+// Devuelve { kind: "streamwish"|"vidhide", host, id } o null.
+function extractEmbed(playerHtml) {
+  // streamwish: https://<streamwish host>/e/<id>
+  const sw = playerHtml.match(
+    new RegExp("https?:\\/\\/(?:www\\.)?(?:[\\w-]+\\.)+?\\/e\\/([A-Za-z0-9]{6,})")
   );
-  if (m) return m[1];
-  const m2 = html.match(/\/e\/([A-Za-z0-9]{10,})/);
-  return m2 ? m2[1] : null;
+  if (sw && (_p(H_SW).includes(sw[0].split("/")[2]) || /streamwish/i.test(sw[0]))) {
+    return { kind: "streamwish", id: sw[1] };
+  }
+  // vidhide: https://vidhidepro.com/v/<id>
+  const vd = playerHtml.match(
+    new RegExp("https?:\\/\\/(?:[\\w-]+\\.)+?\\/v\\/([A-Za-z0-9]{6,})")
+  );
+  if (vd) {
+    return { kind: "vidhide", id: vd[1] };
+  }
+  // caida generica /e/<id>
+  const e = playerHtml.match(/\/e\/([A-Za-z0-9]{6,})/);
+  if (e) return { kind: "streamwish", id: e[1] };
+  return null;
 }
 
-// Aisla el <script> inline que contiene el PACKER (el que trae el dict de
-// links hls). Devuelve su texto.
+// Aisla el <script> inline que contiene el PACKER (el del dict de links hls).
 function extractPackerScript(html) {
   const scripts = html.match(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi) || [];
   for (const sc of scripts) {
@@ -145,7 +161,6 @@ function extractPackerScript(html) {
       return sc.replace(/^<script[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
     }
   }
-  // segundo intento: cualquier script con el PACKER
   for (const sc of scripts) {
     if (sc.includes("eval(function(p,a,c,k,e,d")) {
       return sc.replace(/^<script[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
@@ -154,74 +169,73 @@ function extractPackerScript(html) {
   return null;
 }
 
-// Dado el codigo desofuscado, extrae la primera URL .m3u8 absoluta de los
-// links (hls2/hls3/hls4). Prefiere un master.m3u8 completo sobre un /stream/
-// relativo.
-function pickHls(unpacked, embedUrl) {
+// Extrae el primer m3u8 ABSOLUTO (hls2/hls3) del codigo desofuscado. Prioriza
+// la cadena completa (master con token) sobre la ruta relativa /stream/ (que
+// al pedir su variante devuelve 404). Devuelve null si no hay ninguno.
+function pickHls(unpacked) {
   if (!unpacked) return null;
-  const base = "https://" + SW_HOST;
-  // hls2/hls3 (direcciones absolutas del CDN, cadena completa verificada)
-  // van antes que hls4 (ruta /stream/ en el espejo, cuyo request posterior de
-  // variante relativa devuelve 404).
   const keys = ["hls2", "hls3", "hls4", "hls1"];
   const found = {};
   for (const k of keys) {
-    const re = new RegExp('"' + k + '"\\s*:\\s*"((?:https?:|\\/)[^"]+)"');
-    const m = unpacked.match(re);
-    if (m) {
-      let u = m[1];
-      if (u.startsWith("/")) u = base + u;
-      found[k] = u;
-    }
+    const m = unpacked.match(new RegExp('"' + k + '"\\s*:\\s*"((?:https?:|\\/)[^"]+)"'));
+    if (m) found[k] = m[1];
   }
-  // prioridad explicita: absolutas del CDN primero
-  const pref = keys.filter((k) => found[k] && found[k].includes(PREMILKY[0]));
-  if (pref.length) return found[pref[0]];
-  const mid = keys.filter((k) => found[k] && found[k].endsWith(".m3u8"));
-  return mid.length ? found[mid[0]] : null;
+  // 1) cualquier m3u8 absoluto (CDN completo con token) es preferible al relativo.
+  const abs = keys.filter((k) => found[k] && /^https?:/.test(found[k]) && found[k].endsWith(".m3u8"));
+  if (abs.length) return found[abs[0]];
+  // 2) si todos son relativos, toma el primero que no sea /stream/ si existe.
+  const nonStream = keys.filter((k) => found[k] && !found[k].startsWith("/stream/"));
+  if (nonStream.length) return found[nonStream[0]];
+  // 3) ultimo recurso: cualquier .m3u8.
+  const any = keys.filter((k) => found[k] && found[k].endsWith(".m3u8"));
+  return any.length ? found[any[0]] : null;
 }
 
 /**
- * Resuelve la URL del player del sitio a un m3u8 listo para el player de
- * Nuvio. Devuelve null si la cadena falla en cualquier paso (incluso despues
- * de intentar los espejos a los que apunta el embed original).
+ * Resuelve la URL del player del sitio a un m3u8 listo para el player.
+ * Devuelve null si el hoster no es soportado o la cadena falla.
  */
 export async function resolveHls(playerUrl, fetchText) {
   if (!playerUrl) return null;
   try {
-    // 1) player redirector -> id del hoster
+    // 1) player redirector -> URL del embed del hoster
     const p1 = await fetchText(playerUrl);
-    const id = extractStreamWishId(p1);
-    if (!id) return null;
+    const emb = extractEmbed(p1);
+    if (!emb) return null;
 
-    // 2) embed en el espejo vivo -> script PACKER
-    const embedUrl = "https://" + SW_HOST + "/e/" + id;
+    // 2) embed en el host correcto
+    let embedUrl;
+    if (emb.kind === "vidhide") {
+      embedUrl = "https://" + VID_HOST + "/v/" + emb.id;
+    } else if (emb.kind === "streamwish") {
+      embedUrl = "https://" + SW_HOST + "/e/" + emb.id;
+    } else {
+      return null;
+    }
+
     let embed = "";
     try {
-      embed = await fetchText(embedUrl);
+      embed = await fetchText(embedUrl, {
+        headers: { Referer: "https://" + (emb.kind === "vidhide" ? VID_HOST : SW_HOST) + "/" },
+      });
     } catch (e) {
-      // el espejo principal puede rotar; el dominio base es el fallback clasico
-      const sw = "https://" + _parts(SW_E) + "/e/" + id;
-      try { embed = await fetchText(sw); } catch (e2) { return null; }
+      return null;
     }
     if (!embed) return null;
 
+    // 3) desempacar + extraer el m3u8 absoluto
     const pack = extractPackerScript(embed);
     if (!pack) return null;
-
-    // 3) desempacar + extraer el m3u8
     const code = unpackPacker(pack);
-    const hls = pickHls(code, embedUrl);
+    const hls = pickHls(code);
     return hls;
   } catch (e) {
     return null;
   }
 }
 
-// Lee la maxima resolucion declarada en un master HLS. Devuelve la altura en
-// px (p.ej. 1080) o null si el playlist es mono-variante / no la expone.
-// No descarga segmentos: solo el master (unos cientos de bytes de lineas de
-// variantes).
+// Lee la maxima resolucion declarada en un master HLS (altura en px, p.ej.
+// 1080). No descarga segmentos: solo el master.
 export async function inspectMaster(masterUrl, fetchText) {
   if (!masterUrl || !masterUrl.includes(".m3u8")) return null;
   try {
