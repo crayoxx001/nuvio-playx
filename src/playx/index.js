@@ -24,7 +24,7 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     return servers.map((s, i) => ({
       name: `Play` + `X`,
-      title: `${s.server} · ${s.calidad}`,
+      title: `${s.lang} · ${s.server} · ${s.calidad}`,
       url: s.url,
       quality: s.calidad,
       headers: {
