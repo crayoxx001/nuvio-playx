@@ -20,7 +20,7 @@
 import { resolveUrl } from "./resolver.js";
 import { extractStreams } from "./extractor.js";
 import { ORIGIN, fetchText } from "./http.js";
-import { resolveHls, inspectMaster, resolveBestVariant } from "./hls.js";
+import { resolveHls, inspectMaster } from "./hls.js";
 
 // orden de preferencia de idiomas (el usuario quiere latino/proximo)
 const LANG_REGEX = [
@@ -62,15 +62,12 @@ async function getStreams(tmdbId, mediaType, season, episode) {
         const hls = await resolveHls(s.url, fetchText);
         if (!hls) continue;
         const h = await inspectMaster(hls, fetchText);
-        // politica "mejor calidad fija": devolvemos la mejor VARIANTE del
-        // master (no el master ABR) para que el player no baje solo con ABR.
-        const url = await resolveBestVariant(hls, fetchText);
         resolved.push({
           lang: s.lang,
           rank: langRank(s.lang),
           server: s.server,
           height: h,
-          url,
+          url: hls,
         });
       } catch (e) {
         /* server sin resolver, se omite */

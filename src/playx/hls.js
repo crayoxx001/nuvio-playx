@@ -235,34 +235,3 @@ export async function inspectMaster(masterUrl, fetchText) {
   }
 }
 
-/**
- * Resuelve un master HLS a la URL de su variante de MAYOR resolucion.
- * Descarga el master, empareja cada URI con su linea EXT-X-STREAM-INF,
- * elige la mayor RESOLUTION y devuelve esa variante como URL absoluta.
- * Esto evita que el player haga ABR: reproduce fijo la mejor calidad.
- * Si no hay variantes con RESOLUTION (o falla), devuelve el master tal cual.
- */
-export async function resolveBestVariant(masterUrl, fetchText) {
-  if (!masterUrl || !masterUrl.includes(".m3u8")) return masterUrl;
-  try {
-    const txt = await fetchText(masterUrl);
-    const lines = txt.split("\n");
-    const cands = [];
-    let curRes = null;
-    for (const line of lines) {
-      const resM = line.match(/RESOLUTION=\d+x(\d+)/);
-      if (resM) { curRes = parseInt(resM[1], 10); continue; }
-      const uri = line.trim();
-      if (uri && !uri.startsWith("#") && uri.includes(".m3u8")) {
-        if (curRes) cands.push({ res: curRes, uri });
-        curRes = null;
-      }
-    }
-    if (cands.length === 0) return masterUrl;
-    cands.sort((a, b) => b.res - a.res);
-    return new URL(cands[0].uri, masterUrl).href;
-  } catch (e) {
-    return masterUrl;
-  }
-}
-
