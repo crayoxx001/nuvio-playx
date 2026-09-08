@@ -3,17 +3,19 @@
  * Nuvio llama a getStreams(tmdbId, mediaType, season, episode).
  * Soporta peliculas y series.
  *
- * El sitio no expone URLs de video directas (mp4/m3u8): sus links de
- * reproduccion apuntan a un player redirector que deriva a embeds de
- * hosters con anti-bot (streamwish/vidhide/voe/doodstream). Por eso este
- * provider devuelve esas URLs marcadas para abrirse en el NAVEGADOR EXTERNO
- * del dispositivo (supportsExternalPlayer), donde el player del hoster se
- * renderiza y el usuario pasa el captcha con un toque.
+ * El sitio no expone mp4/m3u8 en el listado: sus links van a un player
+ * redirector (player.php?h=...) que deriva a un embed de StreamWish donde el
+ * m3u8 real viene ofuscado en un script P.A.C.K.E.R. de doble capa.
+ *
+ * Este provider resuelve esa cadena a un .m3u8 absoluto (ver hls.js) y lo
+ * devuelve como URL de stream, por lo que el player interno de Nuvio lo
+ * reproduce nativamente (HLS).
  */
 
 import { resolveUrl } from "./resolver.js";
 import { extractStreams } from "./extractor.js";
-import { ORIGIN } from "./http.js";
+import { ORIGIN, fetchText } from "./http.js";
+import { resolveHls } from "./hls.js";
 
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
@@ -22,19 +24,29 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 
     const { servers } = await extractStreams(detailUrl);
 
-    return servers.map((s, i) => ({
-      name: `Play` + `X`,
-      title: `${s.lang} · ${s.server} · ${s.calidad}`,
-      url: s.url,
-      quality: s.calidad,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36",
-        Referer: ORIGIN + "/",
-      },
-      // se abre en navegador externo: hosters tienen anti-bot propio
-      supportsExternalPlayer: true,
-    }));
+    // Resolvemos cada server a su m3u8 real. Quien falle se descarta (el
+    // hoster pudo cambiar el espejo/ahud).
+    const out = [];
+    for (const s of servers) {
+      try {
+        const hls = await resolveHls(s.url, fetchText);
+        if (!hls) continue;
+        out.push({
+          name: `Play` + `X`,
+          title: `${s.lang} · ${s.server} · ${s.calidad}`,
+          url: hls,
+          quality: s.calidad,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0 Safari/537.36",
+            Referer: ORIGIN + "/",
+          },
+        });
+      } catch (e) {
+        /* server sin resolver, se omite */
+      }
+    }
+    return out;
   } catch (e) {
     console.error(`[provider] Error: ${e.message}`);
     return [];
