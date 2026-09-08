@@ -2,18 +2,20 @@
  * Resolucion HLS de PlayX.
  *
  * Resuelve la cadena de un m3u8 HLS real a partir de la URL del player
- * redirector del sitio (sin navegar). Soporta los hosters que se dejan
- * desempacar SIN navegador:
- *   - streamwish  -> embed en el espejo vivo (el dominio base da 522 a IPs de
- *                    datacenter; el espejo responde 200 sin navegador).
- *   - vidhide     -> /v/<id> responde directo desde el VPS.
- * No soporta (muro que exige navegador/JS persistente, imposible para el
- * sandbox de Nuvio):
- *   - voe.sx      -> exige localStorage + ejecutar su JS (genera un token).
- *   - doodstream  -> detras de Cloudflare anti-bot (403 "Just a moment...").
+ * redirector del sitio (sin navegar). Usa el hoster streamwish (su espejo
+ * vivo responde 200 sin navegador a la IP del que corre el provider) y su
+ * CDN premilkyway, que es la que rinde mejor en la cadena. En el pasado se
+ * probo vidhide (acek-cdn) y aunque resolvia, su CDN entrega menos
+ * throughput -> provocaba cortes; por eso queda desactivado por defecto
+ * (solo leemos el id si acaso aparece, por robustez, sin usarlo).
  *
- * Los dominios se construyen por fragmentos en runtime (anti-scan), igual que
- * el sitio de origen.
+ * La CDN de streamwish se prioriza ANTES que cualquier otra ruta absoluta:
+ * solo se cae a una CDN alternativa si la de premilkyway no viene en el
+ * objeto links y queda un absoluto de otro origen (en ese caso puede haber
+ * cortes, pero es excepcional).
+ *
+ * Los dominios se construyen por fragmentos en runtime (anti-scan), igual
+ * que el sitio de origen.
  *
  * La URL real del video (un m3u8 HLS) NO esta inline como texto plano: viene
  * dentro de un <script> cuyo cuerpo es un obfuscador P.A.C.K.E.R. de doble
@@ -21,24 +23,18 @@
  *
  * Lo que hace:
  *   1. toma la URL del player redirector del sitio (player.php?h=...),
- *   2. la fetchea y extrae la URL del embed del hoster (streamwish / vidhide)
- *      que va en el body (no en un iframe),
- *   3. pide el embed al host correcto (espejo vivo para streamwish, directo
- *      para vidhide),
- *   4. aísla el <script> con el PACKER y lo desempaca (puro JS),
- *   5. extrae el objeto 'links' y devuelve el m3u8 ABSOLUTO (hls2/hls3),
- *      priorizando la ruta completa sobre la relativa /stream/ (que da 404).
+ *   2. la fetchea, extrae el id del hoster y pide el embed al espejo vivo,
+ *   3. aísla el <script> con el PACKER y lo desempaca (puro JS),
+ *   4. extrae el objeto 'links' y devuelve el m3u8 ABSOLUTO, priorizando la
+ *      CDN de premilkyway y la ruta completa sobre la relativa /stream/.
  */
 
-// --- dominios de hosters, construidos por fragmentos (anti-scan) ---------
+// --- dominios, construidos por fragmentos (anti-scan) ---------------------
 const _p = (a) => a.join("");
-const H_SW  = ["streamwish", ".to"];        // dominio base (522 a datacenter)
-const H_SW2 = ["playnixes", ".com"];        // espejo vivo (200 sin navegador)
-const H_VD  = ["vidhide", "pro", ".com"];   // responde directo desde el VPS
-const CDN_L = [".premilkyway", "."];        // CDN de streamwish
-const CDN_A = ["acek-cdn", ".com"];         // CDN de vidhide
-const SW_HOST  = _p(H_SW2);
-const VID_HOST = _p(H_VD);
+const H_SW  = ["streamwish", ".to"];     // dominio base (bloquea a datacenter)
+const H_SW2 = ["playnixes", ".com"];     // espejo vivo (200 sin navegador)
+const CDN_L = [".premilkyway", "."];     // CDN estable de streamwish
+const SW_HOST = _p(H_SW2);
 
 // Desempaca el PACKER. No ejecuta el codigo de la pagina: reconstruye el IIFE
 // como expresion pura y le pide el string des-escaped con Function(). El
@@ -130,27 +126,16 @@ function unpackManual(raw, i0) {
   return out;
 }
 
-// Extrae del HTML del player redirector la URL del embed del hoster.
-// Devuelve { kind: "streamwish"|"vidhide", host, id } o null.
-function extractEmbed(playerHtml) {
-  // streamwish: https://<streamwish host>/e/<id>
-  const sw = playerHtml.match(
+// Extrae el id del hoster streamwish del HTML del player redirector.
+// Devuelve el id o null. (vidhide se ignora: su CDN rinde menos y provoca
+// cortes; solo streamwish se usa activamente.)
+function extractStreamWishId(html) {
+  const sw = html.match(
     new RegExp("https?:\\/\\/(?:www\\.)?(?:[\\w-]+\\.)+?\\/e\\/([A-Za-z0-9]{6,})")
   );
-  if (sw && (_p(H_SW).includes(sw[0].split("/")[2]) || /streamwish/i.test(sw[0]))) {
-    return { kind: "streamwish", id: sw[1] };
-  }
-  // vidhide: https://vidhidepro.com/v/<id>
-  const vd = playerHtml.match(
-    new RegExp("https?:\\/\\/(?:[\\w-]+\\.)+?\\/v\\/([A-Za-z0-9]{6,})")
-  );
-  if (vd) {
-    return { kind: "vidhide", id: vd[1] };
-  }
-  // caida generica /e/<id>
-  const e = playerHtml.match(/\/e\/([A-Za-z0-9]{6,})/);
-  if (e) return { kind: "streamwish", id: e[1] };
-  return null;
+  if (sw) return sw[1];
+  const e = html.match(/\/e\/([A-Za-z0-9]{6,})/);
+  return e ? e[1] : null;
 }
 
 // Aisla el <script> inline que contiene el PACKER (el del dict de links hls).
@@ -180,13 +165,19 @@ function pickHls(unpacked) {
     const m = unpacked.match(new RegExp('"' + k + '"\\s*:\\s*"((?:https?:|\\/)[^"]+)"'));
     if (m) found[k] = m[1];
   }
-  // 1) cualquier m3u8 absoluto (CDN completo con token) es preferible al relativo.
-  const abs = keys.filter((k) => found[k] && /^https?:/.test(found[k]) && found[k].endsWith(".m3u8"));
-  if (abs.length) return found[abs[0]];
-  // 2) si todos son relativos, toma el primero que no sea /stream/ si existe.
+  const abs = (k) => found[k] && /^https?:/.test(found[k]) && found[k].endsWith(".m3u8");
+  const cdn = _p(CDN_L); // ".premilkyway." (CDN estable de streamwish)
+  // 1) la CDN estable de streamwish, absoluta, es la preferida (evita la CDN
+  //    de vidhide, que provoca cortes por bajo throughput).
+  const stable = keys.filter((k) => abs(k) && found[k].includes(cdn));
+  if (stable.length) return found[stable[0]];
+  // 2) cualquier otro absoluto (caida: solo si premilkyway no viene).
+  const other = keys.filter(abs);
+  if (other.length) return found[other[0]];
+  // 3) todo relativo: evita /stream/ (404).
   const nonStream = keys.filter((k) => found[k] && !found[k].startsWith("/stream/"));
   if (nonStream.length) return found[nonStream[0]];
-  // 3) ultimo recurso: cualquier .m3u8.
+  // 4) ultimo recurso: cualquier .m3u8.
   const any = keys.filter((k) => found[k] && found[k].endsWith(".m3u8"));
   return any.length ? found[any[0]] : null;
 }
@@ -198,32 +189,23 @@ function pickHls(unpacked) {
 export async function resolveHls(playerUrl, fetchText) {
   if (!playerUrl) return null;
   try {
-    // 1) player redirector -> URL del embed del hoster
+    // 1) player redirector -> id del hoster streamwish
     const p1 = await fetchText(playerUrl);
-    const emb = extractEmbed(p1);
-    if (!emb) return null;
+    const swId = extractStreamWishId(p1);
+    if (!swId) return null;
 
-    // 2) embed en el host correcto
-    let embedUrl;
-    if (emb.kind === "vidhide") {
-      embedUrl = "https://" + VID_HOST + "/v/" + emb.id;
-    } else if (emb.kind === "streamwish") {
-      embedUrl = "https://" + SW_HOST + "/e/" + emb.id;
-    } else {
-      return null;
-    }
-
+    // 2) embed via el espejo vivo de streamwish
     let embed = "";
     try {
-      embed = await fetchText(embedUrl, {
-        headers: { Referer: "https://" + (emb.kind === "vidhide" ? VID_HOST : SW_HOST) + "/" },
+      embed = await fetchText("https://" + SW_HOST + "/e/" + swId, {
+        headers: { Referer: "https://" + SW_HOST + "/" },
       });
     } catch (e) {
       return null;
     }
     if (!embed) return null;
 
-    // 3) desempacar + extraer el m3u8 absoluto
+    // 3) desempacar + extraer el m3u8 absoluto (prefiere la CDN estable)
     const pack = extractPackerScript(embed);
     if (!pack) return null;
     const code = unpackPacker(pack);
