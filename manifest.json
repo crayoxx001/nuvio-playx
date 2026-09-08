@@ -1,18 +1,21 @@
-[
-  {
-    "id": "playx",
-    "name": "PlayX",
-    "description": "Peliculas y series en espanol. Abre los servidores de reproduccion (streamwish, vidhide, voe, doodstream) en navegador externo del dispositivo.",
-    "version": "0.1.0",
-    "author": "Zeus",
-    "supportedTypes": ["movie", "tv"],
-    "filename": "providers/playx.js",
-    "enabled": true,
-    "logo": "",
-    "contentLanguage": ["es"],
-    "formats": ["mp4", "m3u8"],
-    "limited": false,
-    "disabledPlatforms": [],
-    "supportsExternalPlayer": true
-  }
-]
+{
+  "name": "PlayX",
+  "version": "0.1.3",
+  "scrapers": [
+    {
+      "id": "playx",
+      "name": "PlayX",
+      "description": "Peliculas y series en espanol. Servidores de reproduccion (streamwish, vidhide, voe, doodstream) priorizando latino.",
+      "version": "0.1.3",
+      "author": "Zeus",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/playx.js",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": ["es"],
+      "formats": ["mp4", "m3u8"],
+      "limited": false,
+      "supportsExternalPlayer": true
+    }
+  ]
+}
