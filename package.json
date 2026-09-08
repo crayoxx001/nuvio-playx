@@ -1,7 +1,7 @@
 {
   "scripts": {
-    "build": "node build.js poseidon",
-    "build:watch": "node build.js --watch poseidon",
+    "build": "node build.js playx",
+    "build:watch": "node build.js --watch playx",
     "test": "node test.js"
   },
   "devDependencies": {

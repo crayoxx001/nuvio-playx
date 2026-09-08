@@ -5,7 +5,7 @@
     {
       "id": "playx",
       "name": "PlayX",
-      "description": "Peliculas y series en espanol. Resuelve hosters HLS (streamwish/premilkyway) priorizando latino.",
+      "description": "Películas y series en español. Devuelve enlaces de reproducción HLS (priorizando audio latino).",
       "version": "0.4.0",
       "author": "Zeus",
       "supportedTypes": ["movie", "tv"],
@@ -13,9 +13,9 @@
       "enabled": true,
       "logo": "",
       "contentLanguage": ["es"],
-      "formats": ["mp4", "m3u8"],
+      "formats": ["m3u8"],
       "limited": false,
-      "supportsExternalPlayer": true
+      "supportsExternalPlayer": false
     }
   ]
 }

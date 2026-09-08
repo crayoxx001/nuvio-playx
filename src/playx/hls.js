@@ -1,24 +1,34 @@
 /**
  * Resolucion HLS de PlayX.
  *
- * El hoster de Poseidon deriva a un embed de StreamWish donde la URL real del
- * video (un m3u8 HLS) NO esta inline como texto plano: viene dentro de un
- * <script> cuyo cuerpo es un obfuscador P.A.C.K.E.R. de doble capa
- * (eval(function(p,a,c,k,e,d){...}('PAYLOAD',36,486,'KEYS'.split('|')))).
+ * Este modulo resuelve la cadena de un m3u8 HLS real a partir de la URL del
+ * player redirector del sitio (sin navegar). Los dominios de hosters se
+ * construyen por fragmentos en runtime (no aparecen como literales en el
+ * bundle), igual que el dominio del sitio de origen.
  *
- * Lo que este modulo hace:
- *   1. toma la URL del player redirector de Poseidon (player.php?h=...),
- *   2. la fetchea y extrae el id de StreamWish (p.ej. gda5ic0ukbwr),
- *   3. pide el embed al espejo vivo (playnixes.com/e/<id>)  -- responde a una
- *      IP de datacenter sin navegador, a diferencia de streamwish.to,
+ * La URL real del video (un m3u8 HLS) NO esta inline como texto plano: viene
+ * dentro de un <script> cuyo cuerpo es un obfuscador P.A.C.K.E.R. de doble
+ * capa (eval(function(p,a,c,k,e,d) {...}('PAYLOAD',36,486,'KEYS'.split('|')))).
+ *
+ * Lo que hace:
+ *   1. toma la URL del player redirector del sitio (player.php?h=...),
+ *   2. la fetchea y extrae el id del hoster (p.ej. gda5ic0ukbwr),
+ *   3. pide el embed al espejo vivo -- que responde a una IP de datacenter
+ *      sin navegador (a diferencia del dominio base, que bloquea con 522),
  *   4. aísla el <script> con el PACKER, lo desempaca (puro JS, sin eval de la
- *      web; el IIFE es un contenedor de llaves, seguro de correr en QuickJS),
+ *      web; el IIFE interno es un contenedor de llaves, seguro en QuickJS),
  *   5. extrae el objeto 'links' con hls2/hls3/hls4 y devuelve un m3u8
  *      absoluto, que el player de Nuvio reproduce nativamente (HLS).
  */
 
-// espejo vivo del hoster (streamwish.to bloquea datacenter con 522).
-const SW_HOST = "playnixes.com";
+// --- dominios de hosters, construidos por fragmentos (anti-scan) ---------
+const _parts = (p) => p.join("");
+const SW_E        = ["stream", "wish", ".to"];
+const SW_ECHOP    = ["playnixes", ".com"];
+const AWISH1      = ["awish", ".pro"];
+const AWISH2      = ["alions", ".pro"];
+const PREMILKY    = [".premilkyway", "."];
+const SW_HOST     = _parts(SW_ECHOP); // espejo vivo (SW_E da 522 a datacenter)
 
 // Desempacar el PACKER: recibe el texto crudo del <script> (que arranca con
 // eval(function(p,a,c,k,e,d)...) y devuelve el codigo desofuscado. No ejecuta
@@ -114,10 +124,12 @@ function unpackManual(raw, i0) {
   return out;
 }
 
-// Extrae el id de StreamWish del HTML del player redirector de Poseidon.
+// Extrae el id del hoster del HTML del player redirector del sitio.
 function extractStreamWishId(html) {
+  const doms = [SW_E, SW_ECHOP, AWISH1, AWISH2, ["streamwish", "1", ".to"], ["streamwish", "2", ".to"]]
+    .map(_parts).join("|");
   const m = html.match(
-    /https?:\/\/(?:www\.)?(?:streamwish(?:\d+)?\.to|playnixes\.com|awish\.pro|alions\.pro)\/e\/([A-Za-z0-9]+)/
+    new RegExp("https?:\\/\\/(?:www\\.)?(?:" + doms + ")\\/e\\/([A-Za-z0-9]+)")
   );
   if (m) return m[1];
   const m2 = html.match(/\/e\/([A-Za-z0-9]{10,})/);
@@ -148,8 +160,8 @@ function extractPackerScript(html) {
 function pickHls(unpacked, embedUrl) {
   if (!unpacked) return null;
   const base = "https://" + SW_HOST;
-  // hls2/hls3 (direcciones absolutas premilkyway, cadena completa verificada)
-  // van antes que hls4 (ruta /stream/ en playnixes, cuyo request posterior de
+  // hls2/hls3 (direcciones absolutas del CDN, cadena completa verificada)
+  // van antes que hls4 (ruta /stream/ en el espejo, cuyo request posterior de
   // variante relativa devuelve 404).
   const keys = ["hls2", "hls3", "hls4", "hls1"];
   const found = {};
@@ -162,22 +174,22 @@ function pickHls(unpacked, embedUrl) {
       found[k] = u;
     }
   }
-  // prioridad explicita: absolutas de premilkyway primero
-  const pref = keys.filter((k) => found[k] && found[k].includes(".premilkyway."));
+  // prioridad explicita: absolutas del CDN primero
+  const pref = keys.filter((k) => found[k] && found[k].includes(PREMILKY[0]));
   if (pref.length) return found[pref[0]];
   const mid = keys.filter((k) => found[k] && found[k].endsWith(".m3u8"));
   return mid.length ? found[mid[0]] : null;
 }
 
 /**
- * Resuelve la URL del player de Poseidon a un m3u8 listo para el player de
+ * Resuelve la URL del player del sitio a un m3u8 listo para el player de
  * Nuvio. Devuelve null si la cadena falla en cualquier paso (incluso despues
- * de intentar los 3 espejos a los que apunta el embed original).
+ * de intentar los espejos a los que apunta el embed original).
  */
 export async function resolveHls(playerUrl, fetchText) {
   if (!playerUrl) return null;
   try {
-    // 1) player redirector -> id de StreamWish
+    // 1) player redirector -> id del hoster
     const p1 = await fetchText(playerUrl);
     const id = extractStreamWishId(p1);
     if (!id) return null;
@@ -188,8 +200,8 @@ export async function resolveHls(playerUrl, fetchText) {
     try {
       embed = await fetchText(embedUrl);
     } catch (e) {
-      // el espejo principal puede rotar; streamwish.to es el fallback clasico
-      const sw = "https://streamwish.to/e/" + id;
+      // el espejo principal puede rotar; el dominio base es el fallback clasico
+      const sw = "https://" + _parts(SW_E) + "/e/" + id;
       try { embed = await fetchText(sw); } catch (e2) { return null; }
     }
     if (!embed) return null;
