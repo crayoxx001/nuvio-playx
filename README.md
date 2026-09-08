@@ -1,10 +1,10 @@
 # PlayX — Nuvio provider
 
-Provider de películas en español para la app Nuvio. Devuelve servidores de
-reproducción de hosters externos (streamwish, vidhide, voe, doodstream) que
-se abren en el navegador externo del dispositivo (`supportsExternalPlayer`),
-tal como renderea cada hoster su propio player y deja pasar el captcha con
-un toque.
+Provider de películas y series en español para la app Nuvio. Cada episodio o
+película devuelve servidores de reproducción de hosters externos (streamwish,
+vidhide, voe, doodstream) que se abren en el navegador externo del dispositivo
+(`supportsExternalPlayer`), tal como renderea cada hoster su propio player y
+deja pasar el captcha con un toque.
 
 > No expone URLs de video directas (mp4/m3u8): el contenido se reproduce
 > desde el player de cada hoster, no en el player nativo de Nuvio.
@@ -18,8 +18,8 @@ un toque.
 
 ## Soportes
 
-- `movie` ✓ (`supportedTypes`)
-- `tv` — pendiente (devuelve lista vacía)
+- `movie` ✓
+- `tv` ✓ (cada episodio se resuelve por su temporada/episodio)
 - idioma: español
 
 ## Build local

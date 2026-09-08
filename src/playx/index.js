@@ -1,6 +1,7 @@
 /**
  * Nuvio provider - main entry.
  * Nuvio llama a getStreams(tmdbId, mediaType, season, episode).
+ * Soporta peliculas y series.
  *
  * El sitio no expone URLs de video directas (mp4/m3u8): sus links de
  * reproduccion apuntan a un player redirector que deriva a embeds de
@@ -16,8 +17,7 @@ import { ORIGIN } from "./http.js";
 
 async function getStreams(tmdbId, mediaType, season, episode) {
   try {
-    if (mediaType === "tv") return [];
-    const detailUrl = await resolveUrl(tmdbId, mediaType);
+    const detailUrl = await resolveUrl(tmdbId, mediaType, season, episode);
     if (!detailUrl) return [];
 
     const { servers } = await extractStreams(detailUrl);

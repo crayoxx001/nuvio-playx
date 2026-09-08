@@ -1,9 +1,12 @@
 /**
- * Resolver: encuentra la URL de detalle del contenido a partir del
- * TMDb id que Nuvio entrega.
- * Estrategia (sin API keys): el sitio indexa las pelis con URL
- *   /pelicula/<TMDbId>/<slug> / /serie/<TMDbId>/<slug>
- * Escaneamos las secciones de listado buscando una coincidencia exacta del id.
+ * Resolver: encuentra la URL (de peli o de episodio) a partir del TMDb id
+ * que Nuvio entrega.
+ *
+ * movie: el sitio indexa las pelis con /pelicula/<TMDbId>/<slug>.
+ * tv   : la serie es /serie/<TMDbId>/<slug> y cada capitulo cuelga de
+ *        /serie/<id>/<slug>/temporada/<S>/episodio/<E>.
+ * Escaneamos las secciones de listado buscando el id exacto, sacamos el
+ * slug/base, y para tv ensamblamos la URL del capitulo pedido.
  */
 
 import { fetchText, ORIGIN } from "./http.js";
@@ -20,43 +23,33 @@ const SECTIONS = [
   "/series",
 ];
 
-function extractDetailUrl(html, id, mediaType) {
-  // match exacto del id en el patron de URL del tipo pedido
-  const re = new RegExp(
-    `<a href="/(pelicula|serie)/${id}/[^"]+"`,
-    "g"
-  );
-  const found = new Set();
-  let m;
-  while ((m = re.exec(html))) {
-    found.add(m[1]);
-  }
-  if (mediaType === "tv") return found.has("serie") ? pick(html, id, "serie") : null;
-  return pick(html, id, "pelicula") || null;
+// devuelve la base /serie|pelicula/<id>/<slug> si el id aparece en la seccion
+function findBase(html, id, type) {
+  const m = html.match(new RegExp(`<a href="/(${type})/${id}/[^"]+"`));
+  if (!m) return null;
+  const href = m[0].match(/href="([^"]+)"/)[1];
+  // cortar en el slug (puede venir degradado con /temporada/...)
+  return href.split("/temporada/")[0];
 }
 
-function pick(html, id, type) {
-  const m = html.match(
-    `<a href="/${type}/${id}/[^"]+"`
-  );
-  return m ? BASE + m[0].replace('href="', "").replace(/"\s*$/, "") : null;
-}
-
-export async function resolveUrl(tmdbId, mediaType) {
+export async function resolveUrl(tmdbId, mediaType, season, episode) {
   const type = mediaType === "tv" ? "serie" : "pelicula";
+  let base = null;
   for (const section of SECTIONS) {
     try {
       const html = await fetchText(BASE + section);
-      const m = html.match(
-        new RegExp(`<a href="/(${type})/${tmdbId}/[^"]+"`)
-      );
-      if (m) {
-        const href = m[0].match(/href="([^"]+)"/)[1];
-        return BASE + href;
-      }
+      base = findBase(html, tmdbId, type);
+      if (base) break;
     } catch (_) {
       /* seccion caida o bloqueada: seguir */
     }
   }
-  return null;
+  if (!base) return null;
+  // en series agregamos el capitulo pedido
+  if (mediaType === "tv") {
+    const s = season || 1;
+    const e = episode || 1;
+    return BASE + base + `/temporada/${s}/episodio/${e}`;
+  }
+  return BASE + base;
 }
