@@ -1,6 +1,6 @@
 /**
  * playx - Built from src/playx/
- * Generated: 2026-09-08T21:34:02.702Z
+ * Generated: 2026-09-08T22:21:24.573Z
  */
 var __defProp = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -72,11 +72,53 @@ var SECTIONS = [
   "/series/estrenos",
   "/series"
 ];
+var SM_MOVIES = `${BASE}/sitemap/movies.xml`;
+var SM_SERIES = `${BASE}/sitemap/series.xml`;
 function findBase(html, id, type) {
   const m = html.match(new RegExp(`<a href="/(${type})/${id}/[^"]+"`));
   if (!m) return null;
   const href = m[0].match(/href="([^"]+)"/)[1];
   return href.split("/temporada/")[0];
+}
+function extractChunkLocations(indexXml) {
+  return __async(this, null, function* () {
+    const re = /<loc>([^<]+)<\/loc>/g;
+    const out = [];
+    let m;
+    while (m = re.exec(indexXml)) out.push(m[1].trim());
+    return out;
+  });
+}
+function matchChunk(html, id, type) {
+  const hit = html.match(new RegExp(`/(${type})/${id}/[^<" ]*`));
+  if (!hit) return null;
+  return hit[0];
+}
+function findInSitemap(id, type, mediaType) {
+  return __async(this, null, function* () {
+    const indexXml = yield fetchText(mediaType === "tv" ? SM_SERIES : SM_MOVIES);
+    const subLocs = yield extractChunkLocations(indexXml);
+    if (subLocs.length === 0) return null;
+    return yield new Promise((resolve) => {
+      let done = false;
+      const finish = (r) => {
+        if (done) return;
+        done = true;
+        resolve(r);
+      };
+      let settled = 0;
+      for (const loc of subLocs) {
+        fetchText(loc).then((html) => {
+          const path = matchChunk(html, id, type);
+          if (path) finish(path);
+        }).catch(() => {
+        }).finally(() => {
+          settled++;
+          if (settled === subLocs.length) finish(null);
+        });
+      }
+    });
+  });
 }
 function resolveUrl(tmdbId, mediaType, season, episode) {
   return __async(this, null, function* () {
@@ -89,6 +131,10 @@ function resolveUrl(tmdbId, mediaType, season, episode) {
         if (base) break;
       } catch (_) {
       }
+    }
+    if (!base) {
+      const path = yield findInSitemap(tmdbId, type, mediaType);
+      if (path) base = "/" + path.split("/").slice(1, 4).join("/");
     }
     if (!base) return null;
     if (mediaType === "tv") {
