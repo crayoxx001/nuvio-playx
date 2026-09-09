@@ -1,2 +1,4 @@
 node_modules/
 package-lock.json
+# Fuentes de desarrollo: solo se publica el bundle compilado (providers/*.js)
+src/
